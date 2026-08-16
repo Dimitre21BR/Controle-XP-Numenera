@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Visualizador de XP — Somente Leitura</title>
+<style>
+  :root{--bg:#121212;--card:#1e1e1e;--muted:#9aa0a6;--accent:#00aaff;--border:#bfbfbf}
+  body{margin:0;font-family:Inter,Segoe UI,Arial,sans-serif;background:var(--bg);color:#fff;padding:18px}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+  h1{font-size:1.25rem;margin:0}
+  .container{max-width:1100px;margin:0 auto}
+  .card{background:var(--card);padding:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.03)}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
+  input[type="search"]{padding:8px 10px;border-radius:6px;border:1px solid #333;background:#0f0f0f;color:#fff}
+  button{background:var(--accent);color:#000;padding:8px 10px;border-radius:6px;border:1px solid var(--border);cursor:pointer;font-weight:700}
+  button.secondary{background:#444;color:#fff}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{padding:10px;border-bottom:1px solid rgba(255,255,255,0.04);text-align:left}
+  thead th{background:transparent;cursor:pointer;user-select:none}
+  thead th .arrow{margin-left:6px;opacity:.9}
+  tbody tr:nth-child(even){background:rgba(255,255,255,0.01)}
+  .small{font-size:.9rem;color:var(--muted)}
+  .center{text-align:center}
+  .badge{display:inline-block;padding:4px 8px;border-radius:999px;background:#222;color:#fff;border:1px solid rgba(255,255,255,0.04);font-weight:600}
+  @media (max-width:720px){
+    th,td{padding:8px;font-size:.95rem}
+    .controls{flex-direction:column;align-items:stretch}
+  }
+/* garante que a seta seja visível e alinhada */
+#xp thead th .arrow {
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  color: #000;
+  opacity: 0.95;
+  font-size: 0.9em;
+  margin-left: 6px;
+}
+</style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Visualizador de XP — Numenera</h1>
+      <div class="small"> </div>
+    </header>
+
+    <div class="card">
+      <div class="controls">
+        <input id="filtroBusca" type="search" placeholder="Buscar jogador..." />
+        <button id="btnAtualizar" class="secondary">Atualizar</button>
+        <div style="flex:1"></div>
+        <div class="small">Ordenar: clique no cabeçalho da coluna</div>
+      </div>
+
+      <div id="status" class="small" style="margin-bottom:8px">Carregando dados...</div>
+
+      <div style="overflow:auto">
+        <table id="xpTable" aria-label="Tabela de XP">
+          <thead>
+            <tr>
+              <!-- Uso de onclick direto para garantir que o clique sempre dispare -->
+              <th data-key="nome" onclick="onSort('nome', this)">Jogador <span class="arrow"></span></th>
+              <th data-key="totalRecebido" class="center" onclick="onSort('totalRecebido', this)">XP Total Recebido <span class="arrow"></span></th>
+              <th data-key="atual" class="center" onclick="onSort('atual', this)">XP Atual <span class="arrow"></span></th>
+              <th data-key="gmiGeral" class="center" onclick="onSort('gmiGeral', this)">GMI Geral <span class="arrow"></span></th>
+              <th data-key="gmiSessao" class="center" onclick="onSort('gmiSessao', this)">GMI Seção <span class="arrow"></span></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div style="margin-top:12px" class="small">
+        Visualização somente leitura. Nenhuma opção de edição está disponível nesta página.
+      </div>
+    </div>
+  </div>
+
+  <!-- Firebase compat (mantém API global usada no outro app) -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+  <script>
+  /* ---------- Configuração Firebase (substitua se necessário) ---------- */
+  const firebaseConfig = {
+    apiKey: "AIzaSyDO9GilZvOmcDYbwY9QnilAVMeyn99EEDg",
+    authDomain: "rpg-control-94126.firebaseapp.com",
+    databaseURL: "https://rpg-control-94126-default-rtdb.firebaseio.com",
+    projectId: "rpg-control-94126",
+    storageBucket: "rpg-control-94126.firebasestorage.app",
+    messagingSenderId: "189644872795",
+    appId: "1:189644872795:web:d64d0a4f793ba94aa6b37e",
+    measurementId: "G-LSKXXLTY5P"
+  };
+
+  // inicializa compat
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  /* ---------- Estado local (somente leitura) ---------- */
+  let favoritos = [];
+  let xpData = [];
+  let xpAtual = {};
+  let gmiContador = {};
+  let gmiSecao = {};
+
+  /* ---------- Utilitários ---------- */
+  function calcularXPRecebido(jogador){
+    return xpData
+      .filter(r => r.jogador === jogador && r.tipo === "ganho")
+      .reduce((t,r) => t + (r.valor || 0), 0);
+  }
+
+  function setStatus(msg, isError = false){
+    const el = document.getElementById("status");
+    el.innerText = msg;
+    el.style.color = isError ? "#ff6b6b" : "";
+  }
+
+  /* ---------- Carregamento dos dados (read-only) ---------- */
+  async function carregarDadosOnline(){
+    setStatus("Carregando dados do Firebase...");
+    try{
+      const snaps = await Promise.all([
+        db.ref("rpg_public/favoritos").once("value"),
+        db.ref("rpg_public/xpData").once("value"),
+        db.ref("rpg_public/xpAtual").once("value"),
+        db.ref("rpg_public/gmiContador").once("value"),
+        db.ref("rpg_public/gmiSecao").once("value")
+      ]);
+      const f = snaps[0].val(), xd = snaps[1].val(), xa = snaps[2].val(), gc = snaps[3].val(), gs = snaps[4].val();
+      favoritos = Array.isArray(f) ? f : (f ? Object.values(f) : []);
+      xpData = Array.isArray(xd) ? xd : (xd ? Object.values(xd) : []);
+      xpAtual = xa || {};
+      gmiContador = gc || {};
+      gmiSecao = gs || {};
+      setStatus("Dados carregados com sucesso.");
+      renderTabelaXP();
+      atualizarSetasVisuais(); // garante setas após carregar
+    }catch(err){
+      console.error("Erro ao carregar dados:", err);
+      setStatus("Erro ao carregar dados. Veja o console.", true);
+    }
+  }
+
+  /* ---------- Ordenação simples e confiável (global) ---------- */
+  window.sortState = { key: "nome", asc: true };
+
+  function atualizarSetasVisuais() {
+    document.querySelectorAll("#xp thead th[data-key]").forEach(th => {
+      const arrow = th.querySelector(".arrow");
+      if (!arrow) return;
+      const key = th.getAttribute("data-key");
+      arrow.textContent = (window.sortState.key === key) ? (window.sortState.asc ? "▲" : "▼") : "";
+    });
+  }
+
+  // Função chamada diretamente pelos onclick nos th
+  function onSort(key, thElement) {
+    if (window.sortState.key === key) window.sortState.asc = !window.sortState.asc;
+    else { window.sortState.key = key; window.sortState.asc = true; }
+    renderTabelaXP();
+    atualizarSetasVisuais();
+  }
+
+  /* ---------- Renderização e ordenação da tabela ---------- */
+  function renderTabelaXP(){
+    const tbody = document.querySelector("#xpTable tbody");
+    tbody.innerHTML = "";
+    const busca = (document.getElementById("filtroBusca").value || "").toLowerCase().trim();
+
+    // montar array de jogadores (somente favoritos do tipo Jogador)
+    const jogadores = favoritos
+      .filter(f => f.tipo === "Jogador")
+      .map((j, idx) => ({
+        nome: j.nome,
+        totalRecebido: calcularXPRecebido(j.nome),
+        atual: xpAtual[j.nome] || 0,
+        gmiGeral: gmiContador[j.nome] || 0,
+        gmiSessao: gmiSecao[j.nome] || 0,
+        idx
+      }))
+      .filter(j => j.nome.toLowerCase().includes(busca));
+
+    // ordenar usando sortState (robusto)
+    jogadores.sort((a,b) => {
+      let va = a[window.sortState.key], vb = b[window.sortState.key];
+      if (va === null || typeof va === "undefined") va = "";
+      if (vb === null || typeof vb === "undefined") vb = "";
+      const aNum = Number(va), bNum = Number(vb);
+      if (!Number.isNaN(aNum) && !Number.isNaN(bNum)) {
+        return window.sortState.asc ? aNum - bNum : bNum - aNum;
+      }
+      const sa = String(va).toLowerCase();
+      const sb = String(vb).toLowerCase();
+      const cmp = sa.localeCompare(sb, undefined, { sensitivity: 'base' });
+      if (cmp !== 0) return window.sortState.asc ? cmp : -cmp;
+      return a.idx - b.idx;
+    });
+
+    // render
+    jogadores.forEach(j => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(j.nome)}</td>
+        <td class="center">${j.totalRecebido}</td>
+        <td class="center">${j.atual}</td>
+        <td class="center">${j.gmiGeral}</td>
+        <td class="center">${j.gmiSessao}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    // se vazio
+    if(jogadores.length === 0){
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="5" class="center small">Nenhum jogador encontrado.</td>`;
+      tbody.appendChild(tr);
+    }
+  }
+
+  function escapeHtml(text){
+    return String(text)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  /* ---------- Interações UI ---------- */
+  document.getElementById("btnAtualizar").addEventListener("click", () => {
+    carregarDadosOnline();
+  });
+
+  document.getElementById("filtroBusca").addEventListener("input", () => {
+    renderTabelaXP();
+  });
+function atualizarSetasVisuais() {
+  // percorre todos os th com data-key e atualiza o span.arrow correspondente
+  document.querySelectorAll("#xp thead th[data-key]").forEach(th => {
+    let arrow = th.querySelector(".arrow");
+    if (!arrow) {
+      // cria o span se por algum motivo não existir
+      arrow = document.createElement("span");
+      arrow.className = "arrow";
+      th.appendChild(arrow);
+    }
+    const key = th.getAttribute("data-key");
+    arrow.textContent = (window.sortState && window.sortState.key === key)
+      ? (window.sortState.asc ? "▲" : "▼")
+      : "";
+  });
+}
+
+  /* ---------- Inicialização ---------- */
+  document.addEventListener("DOMContentLoaded", () => {
+    // seta inicial na coluna nome
+    const thNome = document.querySelector('#xp thead th[data-key="nome"] .arrow');
+    if(thNome) thNome.textContent = "▲";
+    // carregar dados ao abrir
+    carregarDadosOnline();
+  });
+  </script>
+</body>
+</html>
