@@ -124,11 +124,11 @@
     setStatus("Carregando dados do Firebase...");
     try{
       const snaps = await Promise.all([
-        db.ref("rpg/favoritos").once("value"),
-        db.ref("rpg/xpData").once("value"),
-        db.ref("rpg/xpAtual").once("value"),
-        db.ref("rpg/gmiContador").once("value"),
-        db.ref("rpg/gmiSecao").once("value")
+        db.ref("rpg_public/favoritos").once("value"),
+        db.ref("rpg_public/xpData").once("value"),
+        db.ref("rpg_public/xpAtual").once("value"),
+        db.ref("rpg_public/gmiContador").once("value"),
+        db.ref("rpg_public/gmiSecao").once("value")
       ]);
       const f = snaps[0].val(), xd = snaps[1].val(), xa = snaps[2].val(), gc = snaps[3].val(), gs = snaps[4].val();
       favoritos = Array.isArray(f) ? f : (f ? Object.values(f) : []);
